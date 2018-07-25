@@ -20,4 +20,4 @@
 
 # End of https://www.gitignore.io/api/go
 
-worker-monitoring
+simple-systemd-monitoring
