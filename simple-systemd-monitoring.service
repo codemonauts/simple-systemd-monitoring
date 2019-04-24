@@ -1,0 +1,18 @@
+[Unit]
+Description="Monitor if a systemnd service is running"
+# When systemd stops or restarts the worker.service, the action is propagated to this unit
+PartOf=worker.service
+# Start this unit after the worker.service start
+After=worker.service
+
+[Service]
+Type=simple
+
+# Example for VictorOps
+# ExecStart=/usr/local/bin/simple-systemd-monitoring -alerting-tool victorops -customer-name "foobar" -rest-id "1234" -rest-key "abcd"
+# Example for PagerDuty
+# ExecStart=/usr/local/bin/simple-systemd-monitoring -alerting-tool pagerduty -customer-name "foobar" -integration-key "1234" 
+ExecStart=...
+
+[Install]
+WantedBy=multi-user.target
