@@ -55,8 +55,35 @@ func createVictoropsEvent(restID string, restKey string, customer string) {
 	defer resp.Body.Close()
 }
 
+type arrayFlags []string
+
+func (i *arrayFlags) String() string {
+	return "my string representation"
+}
+
+func (i *arrayFlags) Set(value string) error {
+	*i = append(*i, value)
+	return nil
+}
+
+func checkService(dbusConn *dbus.Conn, name string) bool {
+	prop, err := dbusConn.GetUnitProperties(name)
+	if err != nil {
+		log.Fatal(err)
+	}
+	subState := prop["SubState"]
+	if subState == "running" {
+		log.Printf("%s is running\n", name)
+		return true
+	} else {
+		log.Printf("%s is not running\n", name)
+		return false
+	}
+}
+
 func main() {
-	serviceNamePtr := flag.String("service-name", "worker.service", "Name of the SystemD Service to monitor")
+	var serviceNames arrayFlags
+	flag.Var(&serviceNames, "service", "Name of the SystemD Services to monitor")
 	durationPtr := flag.String("sleep", "1m", "Time to sleep between checking of the service is running")
 	customerNamePtr := flag.String("customer-name", "", "Name of the customer (Required)")
 	alertingToolPtr := flag.String("alerting-tool", "", "Choose 'pagerduty' or 'victorops' for alerting (Required)")
@@ -67,6 +94,12 @@ func main() {
 
 	// Check that customer-name was set
 	if *customerNamePtr == "" {
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	// Check that we have at least one service name
+	if len(serviceNames) == 0 {
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
@@ -94,23 +127,20 @@ func main() {
 	}
 
 	for {
-		prop, err := dbusConn.GetUnitProperties(*serviceNamePtr)
-		if err != nil {
-			log.Fatal(err)
-		}
-		subState := prop["SubState"]
-		if subState != "running" {
-			switch *alertingToolPtr {
-			case "pagerduty":
-				log.Println("Service is not running! Creating an alert with Pagerduty")
-				createPagerdutyEvent(*integrationKeyPtr, *customerNamePtr)
-			case "victorops":
-				log.Println("Service is not running! Creating an alert with VictorOps")
-				createVictoropsEvent(*restIDPtr, *restKeyPtr, *customerNamePtr)
+		for _, name := range serviceNames {
+			if !checkService(dbusConn, name) {
+				switch *alertingToolPtr {
+				case "pagerduty":
+					log.Println("Service is not running! Creating an alert with Pagerduty")
+					createPagerdutyEvent(*integrationKeyPtr, *customerNamePtr)
+				case "victorops":
+					log.Println("Service is not running! Creating an alert with VictorOps")
+					createVictoropsEvent(*restIDPtr, *restKeyPtr, *customerNamePtr)
+				}
 			}
 		}
 
-		fmt.Printf("Service is running. Sleeping for %s\n", *durationPtr)
+		log.Printf("Sleeping for %s\n", *durationPtr)
 		d, _ := time.ParseDuration(*durationPtr)
 		time.Sleep(d)
 	}
