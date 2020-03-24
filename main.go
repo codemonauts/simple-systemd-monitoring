@@ -126,6 +126,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	d, _ := time.ParseDuration(*durationPtr)
+
 	for {
 		for _, name := range serviceNames {
 			if !checkService(dbusConn, name) {
@@ -138,10 +140,11 @@ func main() {
 					createVictoropsEvent(*restIDPtr, *restKeyPtr, *customerNamePtr)
 				}
 			}
+			log.Printf("Sleeping for 15m")
+			time.Sleep(time.Minute * 15)
 		}
 
-		log.Printf("Sleeping for %s\n", *durationPtr)
-		d, _ := time.ParseDuration(*durationPtr)
+		log.Printf("Sleeping for %d\n", d)
 		time.Sleep(d)
 	}
 }
