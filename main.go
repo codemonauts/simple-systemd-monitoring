@@ -14,20 +14,19 @@ import (
 	"github.com/coreos/go-systemd/dbus"
 )
 
-func createPagerdutyEvent(serviceKey string, customer string) {
+func createPagerdutyEvent(serviceKey string, customer string) error {
 	description := fmt.Sprintf("The worker from %s failed", customer)
 	event := pagerduty.Event{
 		Type:        "trigger",
 		ServiceKey:  serviceKey,
 		Description: description,
 	}
-	resp, err := pagerduty.CreateEvent(event)
+	_, err := pagerduty.CreateEvent(event)
 	if err != nil {
-		log.Println(resp)
-		log.Fatalln("ERROR:", err)
+		return err
 	}
 
-	log.Println("Incident key:", resp.IncidentKey)
+	return nil
 }
 
 type VictoropsIncident struct {
@@ -35,7 +34,7 @@ type VictoropsIncident struct {
 	Description string `json:"entity_display_name"`
 }
 
-func createVictoropsEvent(restID string, restKey string, customer string) {
+func createVictoropsEvent(restID string, restKey string, customer string) error {
 	description := fmt.Sprintf("The worker from %s failed", customer)
 	i := VictoropsIncident{
 		Behaviour:   "CRITICAL",
@@ -48,11 +47,12 @@ func createVictoropsEvent(restID string, restKey string, customer string) {
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
-	resp, err := client.Do(req)
+	_, err = client.Do(req)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	defer resp.Body.Close()
+
+	return nil
 }
 
 type arrayFlags []string
@@ -127,6 +127,7 @@ func main() {
 	}
 
 	d, _ := time.ParseDuration(*durationPtr)
+	var createErr error
 
 	for {
 		for _, name := range serviceNames {
@@ -134,14 +135,18 @@ func main() {
 				switch *alertingToolPtr {
 				case "pagerduty":
 					log.Println("Service is not running! Creating an alert with Pagerduty")
-					createPagerdutyEvent(*integrationKeyPtr, *customerNamePtr)
+					createErr = createPagerdutyEvent(*integrationKeyPtr, *customerNamePtr)
 				case "victorops":
 					log.Println("Service is not running! Creating an alert with VictorOps")
-					createVictoropsEvent(*restIDPtr, *restKeyPtr, *customerNamePtr)
+					createErr = createVictoropsEvent(*restIDPtr, *restKeyPtr, *customerNamePtr)
 				}
 			}
-			log.Printf("Sleeping for 15m")
-			time.Sleep(time.Minute * 15)
+			if createErr != nil {
+				fmt.Errorf("Failed to create incident: %s\n", createErr)
+			} else {
+				log.Printf("SUcessfully created an incident. Sleeping for 15m")
+				time.Sleep(time.Minute * 15)
+			}
 		}
 
 		log.Printf("Sleeping for %d\n", d)
