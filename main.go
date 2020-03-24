@@ -1,17 +1,15 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"time"
 
 	"github.com/PagerDuty/go-pagerduty"
 	"github.com/coreos/go-systemd/dbus"
+	"github.com/imroc/req"
 )
 
 func createPagerdutyEvent(serviceKey string, customer string) error {
@@ -36,18 +34,14 @@ type VictoropsIncident struct {
 
 func createVictoropsEvent(restID string, restKey string, customer string) error {
 	description := fmt.Sprintf("The worker from %s failed", customer)
-	i := VictoropsIncident{
+	incident := VictoropsIncident{
 		Behaviour:   "CRITICAL",
 		Description: description,
 	}
+
 	restEndpoint := fmt.Sprintf("https://alert.victorops.com/integrations/generic/%s/alert/%s/%s", restID, restKey, customer)
-
-	jsonStr, _ := json.Marshal(i)
-	req, err := http.NewRequest("POST", restEndpoint, bytes.NewBuffer(jsonStr))
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	_, err = client.Do(req)
+	header := req.Header{"Content-Type": "application/json"}
+	_, err := req.Post(restEndpoint, req.BodyJSON(&incident), header)
 	if err != nil {
 		return err
 	}
