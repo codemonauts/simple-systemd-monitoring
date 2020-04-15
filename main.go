@@ -7,46 +7,34 @@ import (
 	"os"
 	"time"
 
-	"github.com/PagerDuty/go-pagerduty"
 	"github.com/coreos/go-systemd/dbus"
-	"github.com/imroc/req"
 )
 
-func createPagerdutyEvent(serviceKey string, customer string) error {
-	description := fmt.Sprintf("The worker from %s failed", customer)
-	event := pagerduty.Event{
-		Type:        "trigger",
-		ServiceKey:  serviceKey,
-		Description: description,
-	}
-	_, err := pagerduty.CreateEvent(event)
-	if err != nil {
-		return err
-	}
-
-	return nil
+type Service struct {
+	Name             string
+	Triggered        bool
+	ConsecutiveFails int
 }
 
-type VictoropsIncident struct {
-	Behaviour   string `json:"message_type"`
-	Description string `json:"entity_display_name"`
-}
-
-func createVictoropsEvent(restID string, restKey string, customer string) error {
-	description := fmt.Sprintf("The worker from %s failed", customer)
-	incident := VictoropsIncident{
-		Behaviour:   "CRITICAL",
-		Description: description,
-	}
-
-	restEndpoint := fmt.Sprintf("https://alert.victorops.com/integrations/generic/%s/alert/%s/%s", restID, restKey, customer)
-	header := req.Header{"Content-Type": "application/json"}
-	_, err := req.Post(restEndpoint, req.BodyJSON(&incident), header)
+func (s *Service) check(dbusConn *dbus.Conn) {
+	prop, err := dbusConn.GetUnitProperties(s.Name)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
+	subState := prop["SubState"]
+	if subState == "running" {
+		if s.ConsecutiveFails > 0 {
+			log.Printf("%s is running again after %d failed checks\n", s.Name, s.ConsecutiveFails)
 
-	return nil
+		} else {
+			log.Printf("%s is running\n", s.Name)
+		}
+		s.ConsecutiveFails = 0
+		s.Triggered = false
+	} else {
+		s.ConsecutiveFails++
+		log.Printf("%s is not running. %d consecutive failed check\n", s.Name, s.ConsecutiveFails)
+	}
 }
 
 type arrayFlags []string
@@ -60,59 +48,65 @@ func (i *arrayFlags) Set(value string) error {
 	return nil
 }
 
-func checkService(dbusConn *dbus.Conn, name string) bool {
-	prop, err := dbusConn.GetUnitProperties(name)
-	if err != nil {
-		log.Fatal(err)
-	}
-	subState := prop["SubState"]
-	if subState == "running" {
-		log.Printf("%s is running\n", name)
-		return true
-	} else {
-		log.Printf("%s is not running\n", name)
-		return false
-	}
+type AlertServiceInterface interface {
+	CreateIncident(string, string) error
 }
 
 func main() {
 	var serviceNames arrayFlags
 	flag.Var(&serviceNames, "service", "Name of the SystemD Services to monitor")
-	durationPtr := flag.String("sleep", "1m", "Time to sleep between checking of the service is running")
+	durationPtr := flag.String("sleep", "1m", "Check interval")
+	gracePeriodPtr := flag.String("grace-period", "", "Time before the first check")
+	thresholdPtr := flag.Int("threshold", 1, "Amount of failed checks before alerting")
 	customerNamePtr := flag.String("customer-name", "", "Name of the customer (Required)")
 	alertingToolPtr := flag.String("alerting-tool", "", "Choose 'pagerduty' or 'victorops' for alerting (Required)")
-	integrationKeyPtr := flag.String("integration-key", "", "Integration Key for the PagerDuty service")
+	serviceKeyPtr := flag.String("service-key", "", "Service Key for the PagerDuty service")
 	restIDPtr := flag.String("rest-id", "", "REST ID for VictorOps")
 	restKeyPtr := flag.String("rest-key", "", "REST Key for VictorOps")
 	flag.Parse()
 
 	// Check that customer-name was set
 	if *customerNamePtr == "" {
+		fmt.Println("'-customer-name' is required")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
 	// Check that we have at least one service name
 	if len(serviceNames) == 0 {
+		fmt.Println("Please provide at least one service name")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
 	// Check that the correct API keys where used depending on the choosen alerting tool
+	var alertService AlertServiceInterface
 	switch *alertingToolPtr {
 	case "pagerduty":
-		if *integrationKeyPtr == "" {
+		if *serviceKeyPtr == "" {
+			fmt.Println("Pageduty need the '-service-key' flag")
 			flag.PrintDefaults()
 			os.Exit(1)
 		}
+		alertService = PagerDuty{serviceKey: *serviceKeyPtr}
 	case "victorops":
 		if *restIDPtr == "" || *restKeyPtr == "" {
+			fmt.Println("VictorOps need '-rest-key' and '-rest-id'")
 			flag.PrintDefaults()
 			os.Exit(1)
 		}
+		alertService = VictorOps{restID: *restIDPtr, restKey: *restKeyPtr}
 	default:
+		fmt.Printf("Unknown monitoring tool %q\n", *&alertingToolPtr)
 		flag.PrintDefaults()
 		os.Exit(1)
+	}
+
+	// Grace period
+	if *gracePeriodPtr != "" {
+		log.Printf("Waiting %s before first check", *gracePeriodPtr)
+		graceDuration, _ := time.ParseDuration(*gracePeriodPtr)
+		time.Sleep(graceDuration)
 	}
 
 	dbusConn, err := dbus.NewSystemConnection()
@@ -121,29 +115,27 @@ func main() {
 	}
 
 	d, _ := time.ParseDuration(*durationPtr)
-	var createErr error
+
+	var services []*Service
+	for _, name := range serviceNames {
+		services = append(services, &Service{Name: name, ConsecutiveFails: 0, Triggered: false})
+	}
 
 	for {
-		for _, name := range serviceNames {
-			if !checkService(dbusConn, name) {
-				switch *alertingToolPtr {
-				case "pagerduty":
-					log.Println("Service is not running! Creating an alert with Pagerduty")
-					createErr = createPagerdutyEvent(*integrationKeyPtr, *customerNamePtr)
-				case "victorops":
-					log.Println("Service is not running! Creating an alert with VictorOps")
-					createErr = createVictoropsEvent(*restIDPtr, *restKeyPtr, *customerNamePtr)
+		for _, srv := range services {
+			srv.check(dbusConn)
+			if srv.ConsecutiveFails >= *thresholdPtr && !srv.Triggered {
+				log.Printf("Service %q reached the threshold (%d). Creating an incident!\n", srv.Name, *thresholdPtr)
+				err := alertService.CreateIncident(srv.Name, *customerNamePtr)
+				if err != nil {
+					fmt.Printf("Failed to create incident: %s\n", err.Error())
+				} else {
+					srv.Triggered = true
 				}
-			}
-			if createErr != nil {
-				fmt.Errorf("Failed to create incident: %s\n", createErr)
-			} else {
-				log.Printf("SUcessfully created an incident. Sleeping for 15m")
-				time.Sleep(time.Minute * 15)
 			}
 		}
 
-		log.Printf("Sleeping for %d\n", d)
+		log.Printf("Sleeping for %s\n", *durationPtr)
 		time.Sleep(d)
 	}
 }
