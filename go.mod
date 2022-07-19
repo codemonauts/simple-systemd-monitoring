@@ -1,11 +1,14 @@
 module github.com/codemonauts/simple-systemd-monitoring
 
-go 1.13
+go 1.17
 
 require (
-	github.com/PagerDuty/go-pagerduty v0.0.0-20180528123509-b4a4067bdbde
-	github.com/coreos/go-systemd v0.0.0-20180511133405-39ca1b05acc7
-	github.com/godbus/dbus v4.1.0+incompatible // indirect
-	github.com/google/go-querystring v0.0.0-20170111101155-53e6ce116135 // indirect
-	github.com/imroc/req v0.3.0
+	github.com/PagerDuty/go-pagerduty v1.5.1
+	github.com/coreos/go-systemd/v22 v22.3.2
+	github.com/imroc/req v0.3.2
+)
+
+require (
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/google/go-querystring v1.1.0 // indirect
 )
