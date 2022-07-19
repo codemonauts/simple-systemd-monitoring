@@ -1,6 +1,6 @@
 [Unit]
 Description="Monitor if a systemnd service is running"
-# When systemd stops or restarts the worker.service, the action is propagated to this unit
+# When systemd stops the worker.service, the action is propagated to this unit
 PartOf=worker.service
 # Start this unit after the worker.service start
 After=worker.service
@@ -15,4 +15,5 @@ Type=simple
 ExecStart=...
 
 [Install]
-WantedBy=multi-user.target
+# When systemd starts the worker.service, ssm.service is also started
+WantedBy=worker.service
